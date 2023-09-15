@@ -1,82 +1,94 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
 	"net"
-    "bytes"
-    "encoding/binary"
-    "os"
 )
 
 const (
-	serverAddr    = ":12345"
+	serverAddr    = ":0"
 	maxPacketSize = 2048
-	imageFilePath = "received_image.png"
 )
 
-type ScreenServer struct{
-    conn *net.Conn
-    isReceiving bool
+type ScreemServer struct {
+	hostConn  net.Conn
+	guestConn net.Conn
 }
 
 func main() {
-    ss := &ScreenServer{
-        conn: nil,
-        isReceiving: false,
-    }
-    ss.start()
+	ss := &ScreemServer{
+		hostConn:  nil,
+		guestConn: nil,
+	}
+	ss.start()
+	select {}
 }
 
-func (ss *ScreenServer) start() {
-	ln, err := net.Listen("tcp", serverAddr)
+func (self *ScreemServer) start() {
+	go self.waitForHost()
+	go self.waitForGuest()
+}
+
+func (self *ScreemServer) waitForHost() {
+	hostLn, err := net.Listen("tcp", serverAddr)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("server is listening on", serverAddr)
+	fmt.Println("Connect your host to", hostLn.Addr().String())
+
 	for {
-		conn, err := ln.Accept()
+		conn, err := hostLn.Accept()
 		if err != nil {
 			log.Fatal(err)
 		}
-        ss.conn = &conn
-		go ss.readLoop()
+		fmt.Println("Host connected")
+		self.hostConn = conn
+		go self.readLoop()
 	}
 }
 
-func (ss *ScreenServer) readLoop() {
-    if ss.isReceiving {
-        return
-    }
-    ss.isReceiving = true
-    defer func() {
-        ss.isReceiving = false
-    }()
+func (self *ScreemServer) waitForGuest() {
+	guestLn, err := net.Listen("tcp", serverAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("Connect your guest to", guestLn.Addr().String())
 
-	buf := new(bytes.Buffer)
 	for {
-        var size int64
-        binary.Read(*ss.conn, binary.BigEndian, &size)
-        if size == 0 {
-            continue
-        }
-        log.Printf("Waiting for %d bytes\n", size)
-		n, err := io.CopyN(buf, *ss.conn, size)
+		conn, err := guestLn.Accept()
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Printf("received %d bytes\n", n)
+		fmt.Println("Guest connected")
+		self.guestConn = conn
+	}
+}
 
-        // write to file
-        f, err := os.Create(imageFilePath)
-        if err != nil {
-            log.Fatal(err)
-        }
-        defer f.Close()
-        _, err = f.Write(buf.Bytes())
-        if err != nil {
-            log.Fatal(err)
-        }
+func (self *ScreemServer) readLoop() {
+	var size int64
+	for {
+		binary.Read(self.hostConn, binary.BigEndian, &size)
+		if size == 0 {
+			continue
+		}
+
+		if self.guestConn == nil {
+			// discard the data
+			io.CopyN(io.Discard, self.hostConn, size)
+			continue
+		}
+
+		// send data size to guest
+		binary.Write(self.guestConn, binary.BigEndian, size)
+
+		// send data to guest
+		n, err := io.CopyN(self.guestConn, self.hostConn, size)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("proxied %d bytes\n", n)
 	}
 }
