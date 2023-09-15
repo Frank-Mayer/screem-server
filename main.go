@@ -85,10 +85,9 @@ func (self *ScreemServer) readLoop() {
 		binary.Write(self.guestConn, binary.BigEndian, size)
 
 		// send data to guest
-		n, err := io.CopyN(self.guestConn, self.hostConn, size)
+		_, err := io.CopyN(self.guestConn, self.hostConn, size)
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Printf("proxied %d bytes\n", n)
 	}
 }
